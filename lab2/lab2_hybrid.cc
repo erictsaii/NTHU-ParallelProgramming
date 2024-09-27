@@ -1,19 +1,30 @@
 #include <assert.h>
-#include <stdio.h>
 #include <math.h>
+#include <mpi.h>
+#include <omp.h>
+#include <stdio.h>
 
 int main(int argc, char** argv) {
-	if (argc != 3) {
-		fprintf(stderr, "must provide exactly 2 arguments!\n");
-		return 1;
-	}
-	unsigned long long r = atoll(argv[1]);
-	unsigned long long k = atoll(argv[2]);
-	unsigned long long pixels = 0;
-	for (unsigned long long x = 0; x < r; x++) {
-		unsigned long long y = ceil(sqrtl(r*r - x*x));
-		pixels += y;
-		pixels %= k;
-	}
-	printf("%llu\n", (4 * pixels) % k);
+    unsigned long long r = atoll(argv[1]);
+    unsigned long long rr = r * r;
+    unsigned long long k = atoll(argv[2]);
+    unsigned long long pixels = 0;
+    int rank, size;
+    unsigned long long sum = 0;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+#pragma omp parallel for reduction(+ : pixels)
+    for (unsigned long long x = rank; x < r; x += size) {
+        pixels += ceil(sqrtl(rr - x * x));
+    }
+    pixels %= k;
+    MPI_Reduce(&pixels, &sum, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    if (rank == 0) {
+        printf("%llu\n", (4 * sum) % k);
+    }
+
+    MPI_Finalize();
+    return 0;
 }
