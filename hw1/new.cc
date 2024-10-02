@@ -18,23 +18,40 @@ void mergeSortedArrays(float arr1[], int size1, float arr2[], int size2, float m
         mergedArray[k++] = arr2[j++];
     }
 }
-void mergeSortedArrays2(float arr1[], int size1, float arr2[], int size2, float mergedArray[], int mergedSize) {
-    int i = size1 - 1, j = size2 - 1, k = mergedSize - 1;
-    while (i >= 0 && j >= 0 && k >= 0) {
-        if (arr1[i] > arr2[j]) {
-            mergedArray[k--] = arr1[i--];
-        } else {
-            mergedArray[k--] = arr2[j--];
-        }
-    }
-    while (i >= 0 && k >= 0) {
-        mergedArray[k--] = arr1[i--];
-    }
-    while (j >= 0 && k >= 0) {
-        mergedArray[k--] = arr2[j--];
+
+void merge(float nums1[], int m, float nums2[], int n) {
+    int i = m - 1;
+    int j = n - 1;
+    int k = m + n - 1;
+    while (j >= 0) {
+        if (i >= 0 && nums1[i] > nums2[j])
+            nums1[k--] = nums1[i--];
+        else
+            nums1[k--] = nums2[j--];
     }
 }
-
+void merge_front(float *nums1, int m, float *nums2, int n) {
+    int i = 0;
+    int j = 0;
+    int k = m + n - 1;
+    while (k >= m) {
+        if (i < m && nums1[i] < nums2[j])
+            nums1[k--] = nums1[i++];
+        else
+            nums1[k--] = nums2[j++];
+    }
+}
+void merge_back(float *nums1, int m, float *nums2, int n) {
+    int i = m - 1;
+    int j = n - 1;
+    int k = m + n - 1;
+    while (k >= m) {
+        if (i >= 0 && nums1[i] > nums2[j])
+            nums1[k--] = nums1[i--];
+        else
+            nums1[k--] = nums2[j--];
+    }
+}
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
@@ -53,7 +70,9 @@ int main(int argc, char **argv) {
     int local_n = t_divided_s;
     if (rank == size - 1) local_n += t_mod_s;
     float *data = (float *)malloc(sizeof(float) * (local_n));
+    float *data2 = (float *)malloc(sizeof(float) * (local_n));
     float *tmp_data = (float *)malloc(sizeof(float) * (local_n));
+
     float *merge_data = (float *)malloc(sizeof(float) * (local_n + size));
 
     // =========read file=========
@@ -77,7 +96,7 @@ int main(int argc, char **argv) {
     int test = cnt + local_n - 1;
     float recv_val;
     double start_comm;
-    float *tmp_ptr;
+    float *tmp;
     for (int i = 0; i < size + 1; ++i) {
         if (i & 1) {  // odd phase
             if (odd_neighbor == -1 || odd_neighbor == size) continue;
@@ -90,9 +109,13 @@ int main(int argc, char **argv) {
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, odd_neighbor, 0, merge_data, cnt, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     // communicate_time += MPI_Wtime() - start_comm;
                     mergeSortedArrays(data, local_n, merge_data, cnt, tmp_data, local_n);
-                    tmp_ptr = data;
+                    // merge_front(merge_data, cnt, data, local_n);
+                    // for (int j = 0; j < local_n; ++j) {
+                    //     data[j] = merge_data[test - j];
+                    // }
+                    tmp = data;
                     data = tmp_data;
-                    tmp_data = tmp_ptr;
+                    tmp_data = tmp;
                 }
             } else {
                 // start_comm = MPI_Wtime();
@@ -102,10 +125,11 @@ int main(int argc, char **argv) {
                     // start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, odd_neighbor, 0, merge_data, t_divided_s, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     // communicate_time += MPI_Wtime() - start_comm;
-                    mergeSortedArrays2(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
-                    tmp_ptr = data;
+                    // merge_back(merge_data, t_divided_s, data, local_n);
+                    mergeSortedArrays(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
+                    tmp = data;
                     data = tmp_data;
-                    tmp_data = tmp_ptr;
+                    tmp_data = tmp;
                 }
             }
         } else {  // even phase
@@ -118,10 +142,14 @@ int main(int argc, char **argv) {
                     start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, even_neighbor, 0, merge_data, t_divided_s, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     // communicate_time += MPI_Wtime() - start_comm;
-                    mergeSortedArrays2(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
-                    tmp_ptr = data;
+                    // merge_back(merge_data, t_divided_s, data, local_n);
+                    mergeSortedArrays(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
+                    // for (int j = 0; j < local_n; ++j) {
+                    //     data[j] = merge_data[j + t_divided_s];
+                    // }
+                    tmp = data;
                     data = tmp_data;
-                    tmp_data = tmp_ptr;
+                    tmp_data = tmp;
                 }
             } else {
                 start_comm = MPI_Wtime();
@@ -131,14 +159,48 @@ int main(int argc, char **argv) {
                     start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, even_neighbor, 0, merge_data, cnt, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     // communicate_time += MPI_Wtime() - start_comm;
+                    // merge_front(merge_data, cnt, data, local_n);
                     mergeSortedArrays(data, local_n, merge_data, cnt, tmp_data, local_n);
-                    tmp_ptr = data;
+                    // for (int j = 0; j < local_n; ++j) {
+                    //     data[j] = merge_data[test - j];
+                    // }
+                    tmp = data;
                     data = tmp_data;
-                    tmp_data = tmp_ptr;
+                    tmp_data = tmp;
                 }
             }
         }
     }
+
+    // for (int i = 0;i < size+1;i++){
+    //     if (i % 2){ //odd phase
+    //         if (odd_neighbor==-1 ||odd_neighbor==size) continue;
+    //         if (rank % 2){
+    //             MPI_Recv(merge_data, cnt, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    //             merge(merge_data, cnt, data, local_n);
+    //             MPI_Send(merge_data+local_n, cnt, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD);
+    //             for (int j=0;j < local_n;j++){
+    //                 data[j] = merge_data[j];
+    //             }
+    //         }else{
+    //             MPI_Send(data, local_n, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD);
+    //             MPI_Recv(data, local_n, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    //         }
+    //     }else{ //even
+    //         if (even_neighbor==-1 ||even_neighbor==size) continue;
+    //         if (rank % 2){
+    //             MPI_Send(data, local_n, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD);
+    //             MPI_Recv(data, local_n, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    //         }else{
+    //             MPI_Recv(merge_data, cnt, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    //             merge(merge_data, cnt, data, local_n);
+    //             MPI_Send(merge_data+local_n, cnt, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD);
+    //             for (int j=0;j < local_n;j++){
+    //                 data[j] = merge_data[j];
+    //             }
+    //         }
+    //     }
+    // }
     // double write_start = MPI_Wtime();
     MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
     MPI_File_write_at(output_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
