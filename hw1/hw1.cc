@@ -36,8 +36,8 @@ void mergeSortedArrays2(float arr1[], int size1, float arr2[], int size2, float 
 }
 
 int main(int argc, char **argv) {
+    // ====================initialization====================
     MPI_Init(&argc, &argv);
-
     // double total_start = MPI_Wtime();
     // double communicate_time = 0.0;
     int rank, size;
@@ -56,15 +56,17 @@ int main(int argc, char **argv) {
     float *tmp_data = (float *)malloc(sizeof(float) * (local_n));
     float *merge_data = (float *)malloc(sizeof(float) * (local_n + size));
 
-    // =========read file=========
+    // ===================read file===================
     // double read_start = MPI_Wtime();
     MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
     MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
     MPI_File_close(&input_file);
     // double read_time = MPI_Wtime() - read_start;
 
+    // ===================local sort===================
     boost::sort::spreadsort::spreadsort(data, data + local_n);
 
+    // ===================odd-even sort===================
     int odd_neighbor, even_neighbor;
     if (rank % 2 == 0) {
         odd_neighbor = rank - 1;
@@ -74,10 +76,10 @@ int main(int argc, char **argv) {
         even_neighbor = rank - 1;
     }
     int cnt = (rank == size - 2) ? (local_n + t_mod_s) : local_n;
-    int test = cnt + local_n - 1;
     float recv_val;
     double start_comm;
     float *tmp_ptr;
+
     for (int i = 0; i < size + 1; ++i) {
         if (i & 1) {  // odd phase
             if (odd_neighbor == -1 || odd_neighbor == size) continue;
