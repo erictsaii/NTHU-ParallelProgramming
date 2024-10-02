@@ -57,14 +57,23 @@ int main(int argc, char **argv) {
     float *merge_data = (float *)malloc(sizeof(float) * (local_n + size));
 
     // ===================read file===================
-    // double read_start = MPI_Wtime();
-    MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
-    MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
-    MPI_File_close(&input_file);
-    // double read_time = MPI_Wtime() - read_start;
-
-    // ===================local sort===================
-    boost::sort::spreadsort::spreadsort(data, data + local_n);
+    if (local_n / 2 == 0) {
+        MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
+        MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
+        MPI_File_close(&input_file);
+        boost::sort::spreadsort::spreadsort(data, data + local_n);
+    } else {
+        MPI_Request request;
+        MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
+        MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, tmp_data, local_n / 2, MPI_FLOAT, MPI_STATUS_IGNORE);
+        // MPI_File_read_at(input_file, sizeof(float) * (rank * t_divided_s + local_n / 2), merge_data, (local_n + 1) / 2, MPI_FLOAT, MPI_STATUS_IGNORE);
+        MPI_File_iread_at(input_file, sizeof(float) * (rank * t_divided_s + local_n / 2), merge_data, (local_n + 1) / 2, MPI_FLOAT, &request);
+        boost::sort::spreadsort::spreadsort(tmp_data, tmp_data + local_n / 2);
+        MPI_Wait(&request, MPI_STATUS_IGNORE);
+        boost::sort::spreadsort::spreadsort(merge_data, merge_data + (local_n + 1) / 2);
+        mergeSortedArrays(tmp_data, local_n / 2, merge_data, (local_n + 1) / 2, data, local_n);
+        MPI_File_close(&input_file);
+    }
 
     // ===================odd-even sort===================
     int odd_neighbor, even_neighbor;
