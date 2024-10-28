@@ -1,6 +1,6 @@
 #include <mpi.h>
 
-#include <boost/sort/sort.hpp>
+#include <boost/sort/spreadsort/float_sort.hpp>
 
 void mergeSortedArrays(float arr1[], int size1, float arr2[], int size2, float mergedArray[], int mergedSize) {
     int i = 0, j = 0, k = 0;
@@ -38,8 +38,6 @@ void mergeSortedArrays2(float arr1[], int size1, float arr2[], int size2, float 
 int main(int argc, char **argv) {
     // ====================initialization====================
     MPI_Init(&argc, &argv);
-    // double total_start = MPI_Wtime();
-    // double communicate_time = 0.0;
     int rank, size;
     int total_n = atoi(argv[1]);
     char *input_filename = argv[2];
@@ -60,19 +58,21 @@ int main(int argc, char **argv) {
     if (local_n / 2 == 0) {
         MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
         MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
-        MPI_File_close(&input_file);
-        boost::sort::spreadsort::spreadsort(data, data + local_n);
+        MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
+
+        // MPI_File_close(&input_file);
+        boost::sort::spreadsort::float_sort(data, data + local_n);
     } else {
         MPI_Request request;
         MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
         MPI_File_read_at(input_file, sizeof(float) * rank * t_divided_s, tmp_data, local_n / 2, MPI_FLOAT, MPI_STATUS_IGNORE);
-        // MPI_File_read_at(input_file, sizeof(float) * (rank * t_divided_s + local_n / 2), merge_data, (local_n + 1) / 2, MPI_FLOAT, MPI_STATUS_IGNORE);
         MPI_File_iread_at(input_file, sizeof(float) * (rank * t_divided_s + local_n / 2), merge_data, (local_n + 1) / 2, MPI_FLOAT, &request);
-        boost::sort::spreadsort::spreadsort(tmp_data, tmp_data + local_n / 2);
+        MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
+        boost::sort::spreadsort::float_sort(tmp_data, tmp_data + local_n / 2);
         MPI_Wait(&request, MPI_STATUS_IGNORE);
-        boost::sort::spreadsort::spreadsort(merge_data, merge_data + (local_n + 1) / 2);
+        boost::sort::spreadsort::float_sort(merge_data, merge_data + (local_n + 1) / 2);
         mergeSortedArrays(tmp_data, local_n / 2, merge_data, (local_n + 1) / 2, data, local_n);
-        MPI_File_close(&input_file);
+        // MPI_File_close(&input_file);
     }
 
     // ===================odd-even sort===================
@@ -93,26 +93,18 @@ int main(int argc, char **argv) {
         if (i & 1) {  // odd phase
             if (odd_neighbor == -1 || odd_neighbor == size) continue;
             if (rank & 1) {
-                // start_comm = MPI_Wtime();
                 MPI_Sendrecv(&data[local_n - 1], 1, MPI_FLOAT, odd_neighbor, 0, &recv_val, 1, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // communicate_time += MPI_Wtime() - start_comm;
                 if (data[local_n - 1] > recv_val) {
-                    // start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, odd_neighbor, 0, merge_data, cnt, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    // communicate_time += MPI_Wtime() - start_comm;
                     mergeSortedArrays(data, local_n, merge_data, cnt, tmp_data, local_n);
                     tmp_ptr = data;
                     data = tmp_data;
                     tmp_data = tmp_ptr;
                 }
             } else {
-                // start_comm = MPI_Wtime();
                 MPI_Sendrecv(&data[0], 1, MPI_FLOAT, odd_neighbor, 0, &recv_val, 1, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // communicate_time += MPI_Wtime() - start_comm;
                 if (data[0] < recv_val) {
-                    // start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, odd_neighbor, 0, merge_data, t_divided_s, MPI_FLOAT, odd_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    // communicate_time += MPI_Wtime() - start_comm;
                     mergeSortedArrays2(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
                     tmp_ptr = data;
                     data = tmp_data;
@@ -122,26 +114,18 @@ int main(int argc, char **argv) {
         } else {  // even phase
             if (even_neighbor == -1 || even_neighbor == size) continue;
             if (rank & 1) {
-                start_comm = MPI_Wtime();
                 MPI_Sendrecv(&data[0], 1, MPI_FLOAT, even_neighbor, 0, &recv_val, 1, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // communicate_time += MPI_Wtime() - start_comm;
                 if (data[0] < recv_val) {
-                    start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, even_neighbor, 0, merge_data, t_divided_s, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    // communicate_time += MPI_Wtime() - start_comm;
                     mergeSortedArrays2(data, local_n, merge_data, t_divided_s, tmp_data, local_n);
                     tmp_ptr = data;
                     data = tmp_data;
                     tmp_data = tmp_ptr;
                 }
             } else {
-                start_comm = MPI_Wtime();
                 MPI_Sendrecv(&data[local_n - 1], 1, MPI_FLOAT, even_neighbor, 0, &recv_val, 1, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                // communicate_time += MPI_Wtime() - start_comm;
                 if (data[local_n - 1] > recv_val) {
-                    start_comm = MPI_Wtime();
                     MPI_Sendrecv(data, local_n, MPI_FLOAT, even_neighbor, 0, merge_data, cnt, MPI_FLOAT, even_neighbor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    // communicate_time += MPI_Wtime() - start_comm;
                     mergeSortedArrays(data, local_n, merge_data, cnt, tmp_data, local_n);
                     tmp_ptr = data;
                     data = tmp_data;
@@ -150,28 +134,8 @@ int main(int argc, char **argv) {
             }
         }
     }
-    // double write_start = MPI_Wtime();
-    MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
     MPI_File_write_at(output_file, sizeof(float) * rank * t_divided_s, data, local_n, MPI_FLOAT, MPI_STATUS_IGNORE);
-    MPI_File_close(&output_file);
-    // double write_time = MPI_Wtime() - write_start;
 
-    // double io_time = read_time + write_time;
-    // double compute_time = MPI_Wtime() - total_start - io_time;
-    // double io_sum, compute_sum, communicate_sum;
-    // MPI_Reduce(&io_time, &io_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&compute_time, &compute_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&communicate_time, &communicate_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    // if (rank == 0) {
-    //     io_time = io_sum / size;
-    //     compute_time = compute_sum / size;
-    //     communicate_time = communicate_sum / size;
-    //     printf("IO time: %f\n", io_time);
-    //     printf("compute time: %f\n", compute_time);
-    //     printf("communicate time: %f\n", communicate_time);
-    // }
-
-    MPI_Finalize();
+    // MPI_Finalize();
     return 0;
 }
