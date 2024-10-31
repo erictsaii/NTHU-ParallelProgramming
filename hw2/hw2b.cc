@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
     x0_offest = ((right - left) / width);
 
 /* mandelbrot set */
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(dynamic)
     for (int j = rank; j < width; j += size) {
         for (int i = 0; i < height - 1; i += 2) {
             __m128d x0 = _mm_setzero_pd();

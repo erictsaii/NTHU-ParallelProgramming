@@ -4,6 +4,7 @@
 #define PNG_NO_SETJMP
 #include <assert.h>
 #include <emmintrin.h>
+#include <immintrin.h>
 #include <png.h>
 #include <pthread.h>
 #include <sched.h>
@@ -19,7 +20,7 @@ double right;
 double lower;
 double upper;
 double y0_offset;
-double x0_offest;
+double x0_offset;
 int width;
 int height;
 int cpu_cnt;
@@ -30,65 +31,71 @@ void write_png(const char* filename, int iters, int width, int height, const int
 
 void* mandelbrot_col(void* threadid) {
     while (true) {
-        int w;
+        int w = 0;
         bool last_one = false;
         pthread_mutex_lock(&mutex);
         w = cur_width;
-        cur_width += 2;
+        cur_width += 8;
         pthread_mutex_unlock(&mutex);
-        if (w == width - 1) last_one = true;
         if (w >= width) break;
+        if (w + 8 >= width - 1) last_one = true;  // 有餘數，且這個thread是最後一個
+        int z = (last_one) ? width - w : 8;
+        __mmask8 mask = (1 << z) - 1;
 
         // initialize
-        __m128d x0 = _mm_setzero_pd();
-        __m128d y0 = _mm_setzero_pd();
-        __m128d x = _mm_setzero_pd();
-        __m128d y = _mm_setzero_pd();
-        __m128d xy = _mm_setzero_pd();
-        __m128d xx = _mm_setzero_pd();
-        __m128d yy = _mm_setzero_pd();
-        __m128d length_squared = _mm_setzero_pd();
-        x0[0] = w * x0_offest + left;
-        x0[1] = (w + 1) * x0_offest + left;
-        int image_cnt = 0;
-        int repeats[2];
+        __m512d x0 = _mm512_setzero_pd();
+        __m512d y0 = _mm512_setzero_pd();
+        __m512d x = _mm512_setzero_pd();
+        __m512d y = _mm512_setzero_pd();
+        __m512d xy = _mm512_setzero_pd();
+        __m512d xx = _mm512_setzero_pd();
+        __m512d yy = _mm512_setzero_pd();
+        __m512d length_squared = _mm512_setzero_pd();
+        __m512d two = _mm512_set1_pd(2.0);
+        __m256i one = _mm256_set1_epi32(1);
+        __m512d four = _mm512_set1_pd(4.0);
+        __m512d one_test = _mm512_set1_pd(1.0);
+
+        for (int i = 0; i < 8; ++i) {
+            x0[i] = (w + i) * x0_offset + left;
+        }
 
         for (int i = 0; i < height; ++i) {
             // initialize
-            y0[0] = y0[1] = i * y0_offset + lower;
-            repeats[0] = repeats[1] = 0;
-            x[0] = x[1] = y[0] = y[1] = xy[0] = xy[1] = xx[0] = xx[1] = yy[0] = yy[1] = 0;
-            length_squared[0] = length_squared[1] = 0;
+            __m512d y0 = _mm512_set1_pd(i * y0_offset + lower);
+            x = _mm512_setzero_pd();
+            y = _mm512_setzero_pd();
+            xy = _mm512_setzero_pd();
+            xx = _mm512_setzero_pd();
+            yy = _mm512_setzero_pd();
+            length_squared = _mm512_setzero_pd();
+            __m256i repeats = _mm256_setzero_si256();
+
             // calculate
-            while (length_squared[0] < 4 && length_squared[1] < 4 && repeats[0] < iters) {
-                xy = _mm_mul_pd(x, y);
-                y = _mm_add_pd(_mm_add_pd(xy, xy), y0);
-                x = _mm_add_pd(_mm_sub_pd(xx, yy), x0);
-                xx = _mm_mul_pd(x, x);
-                yy = _mm_mul_pd(y, y);
-                length_squared = _mm_add_pd(xx, yy);
-                ++repeats[0];
-                ++repeats[1];
+
+            int flags[8];
+            int complete_num = 0;
+            memset(flags, 0, sizeof(flags));
+
+            for (int j = 0; j < iters; j++) {
+                xx = _mm512_mul_pd(x, x);
+                yy = _mm512_mul_pd(y, y);
+                length_squared = _mm512_fmadd_pd(x, x, yy);
+
+                __mmask8 finished_mask = _mm512_cmplt_pd_mask(length_squared, four);
+                finished_mask &= mask;
+                if (finished_mask == 0) break;
+                repeats = _mm256_mask_add_epi32(repeats, finished_mask, repeats, one);
+
+                xy = _mm512_mul_pd(x, y);
+                y = _mm512_fmadd_pd(xy, two, y0);
+                x = _mm512_add_pd(_mm512_sub_pd(xx, yy), x0);
             }
-            // maybe someone hasn't finished yet
-            int z = (last_one) ? 1 : 2;
-            for (int i = 0; i < z; ++i) {
-                while (length_squared[i] < 4 && repeats[i] < iters) {
-                    xy = _mm_mul_pd(x, y);
-                    y = _mm_add_pd(_mm_add_pd(xy, xy), y0);
-                    x = _mm_add_pd(_mm_sub_pd(xx, yy), x0);
-                    xx = _mm_mul_pd(x, x);
-                    yy = _mm_mul_pd(y, y);
-                    length_squared = _mm_add_pd(xx, yy);
-                    ++repeats[i];
-                }
-            }
-            image[w + image_cnt] = repeats[0];
-            if (!last_one) image[w + 1 + image_cnt] = repeats[1];
-            image_cnt += width;
+            _mm256_mask_storeu_epi32((__m256*)&image[w + width * i], mask, repeats);
         }
     }
-    pthread_exit(NULL);
+    // pthread_exit(NULL);
+    return NULL;
 }
 
 int main(int argc, char** argv) {
@@ -117,18 +124,20 @@ int main(int argc, char** argv) {
     pthread_t threads[cpu_cnt];
     cur_width = 0;
     y0_offset = ((upper - lower) / height);
-    x0_offest = ((right - left) / width);
+    x0_offset = ((right - left) / width);
 
     /*start mandelbrot*/
     for (int i = 0; i < cpu_cnt; ++i) {
         pthread_create(&threads[i], NULL, mandelbrot_col, NULL);
     }
+
     for (int i = 0; i < cpu_cnt; ++i) {
         pthread_join(threads[i], NULL);
     }
 
     write_png(filename, iters, width, height, image);
-    free(image);
+    // free(image);
+    return 0;
 }
 
 void write_png(const char* filename, int iters, int width, int height, const int* buffer) {
@@ -141,7 +150,7 @@ void write_png(const char* filename, int iters, int width, int height, const int
     png_init_io(png_ptr, fp);
     png_set_IHDR(png_ptr, info_ptr, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-    png_set_filter(png_ptr, 0, PNG_NO_FILTERS);
+    png_set_filter(png_ptr, 0, PNG_FILTER_NONE);
     png_write_info(png_ptr, info_ptr);
     png_set_compression_level(png_ptr, 1);
     size_t row_size = 3 * width * sizeof(png_byte);
@@ -162,8 +171,8 @@ void write_png(const char* filename, int iters, int width, int height, const int
         }
         png_write_row(png_ptr, row);
     }
-    free(row);
+    // free(row);
     png_write_end(png_ptr, NULL);
-    png_destroy_write_struct(&png_ptr, &info_ptr);
-    fclose(fp);
+    // png_destroy_write_struct(&png_ptr, &info_ptr);
+    // fclose(fp);
 }
