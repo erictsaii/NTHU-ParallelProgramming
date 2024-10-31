@@ -43,7 +43,7 @@ void* mandelbrot_col(void* threadid) {
         __mmask8 mask = (1 << z) - 1;
 
         // initialize
-        __m512d x0 = _mm512_setzero_pd();
+        // __m512d x0 = _mm512_setzero_pd();
         __m512d y0 = _mm512_setzero_pd();
         __m512d x = _mm512_setzero_pd();
         __m512d y = _mm512_setzero_pd();
@@ -54,15 +54,25 @@ void* mandelbrot_col(void* threadid) {
         __m512d two = _mm512_set1_pd(2.0);
         __m256i one = _mm256_set1_epi32(1);
         __m512d four = _mm512_set1_pd(4.0);
-        __m512d one_test = _mm512_set1_pd(1.0);
 
+        // __m512d w_vec = _mm512_set_pd(w, w + 1.0, w + 2.0, w + 3.0, w + 4.0, w + 5.0, w + 6.0, w + 7.0);
+        __m512d w_vec = _mm512_setzero_pd();
         for (int i = 0; i < 8; ++i) {
-            x0[i] = (w + i) * x0_offset + left;
+            w_vec[i] = w + i;
         }
+        __m512d x0_offset_vec = _mm512_set1_pd(x0_offset);
+        __m512d left_vec = _mm512_set1_pd(left);
+        __m512d w_mul_x0 = _mm512_mul_pd(w_vec, x0_offset_vec);
+
+        __m512d x0 = _mm512_add_pd(w_mul_x0, left_vec);
+
+        // for (int i = 0; i < 8; ++i) {
+        //     x0[i] = (w + i) * x0_offset + left;
+        // }
 
         for (int i = 0; i < height; ++i) {
             // initialize
-            __m512d y0 = _mm512_set1_pd(i * y0_offset + lower);
+            y0 = _mm512_set1_pd(i * y0_offset + lower);
             x = _mm512_setzero_pd();
             y = _mm512_setzero_pd();
             xy = _mm512_setzero_pd();
@@ -152,7 +162,7 @@ void write_png(const char* filename, int iters, int width, int height, const int
                  PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
     png_set_filter(png_ptr, 0, PNG_FILTER_NONE);
     png_write_info(png_ptr, info_ptr);
-    png_set_compression_level(png_ptr, 1);
+    png_set_compression_level(png_ptr, 0);
     size_t row_size = 3 * width * sizeof(png_byte);
     png_bytep row = (png_bytep)malloc(row_size);
     for (int y = 0; y < height; ++y) {
@@ -163,9 +173,9 @@ void write_png(const char* filename, int iters, int width, int height, const int
             if (p != iters) {
                 if (p & 16) {
                     color[0] = 240;
-                    color[1] = color[2] = (p & 15) * 16;
+                    color[1] = color[2] = (p & 15) << 4;
                 } else {
-                    color[0] = (p & 15) * 16;
+                    color[0] = (p & 15) << 4;
                 }
             }
         }

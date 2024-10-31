@@ -5,7 +5,7 @@ CFLAGS = -lm -O3
 hw2a: CFLAGS += -pthread -mavx512f -mavx512vl
 hw2b: CC = mpicc
 hw2b: CXX = mpicxx
-hw2b: CFLAGS += -fopenmp
+hw2b: CFLAGS += -fopenmp -mavx512f -mavx512vl
 CXXFLAGS = $(CFLAGS)
 TARGETS = hw2seq hw2a hw2b
 
