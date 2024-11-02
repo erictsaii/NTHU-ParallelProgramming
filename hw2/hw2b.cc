@@ -23,19 +23,15 @@ double y0_offset;
 double x0_offset;
 int width;
 int height;
-int cpu_cnt;
-pthread_mutex_t mutex;
-int cur_height;
-int cur_width;
 int* image;
 void write_png(const char* filename, int iters, int width, int height, const int* buffer);
 
 int main(int argc, char** argv) {
     /* detect how many CPUs are available */
-    cpu_set_t cpu_set;
-    sched_getaffinity(0, sizeof(cpu_set), &cpu_set);
-    printf("%d cpus available\n", CPU_COUNT(&cpu_set));
-    cpu_cnt = CPU_COUNT(&cpu_set);
+    // cpu_set_t cpu_set;
+    // sched_getaffinity(0, sizeof(cpu_set), &cpu_set);
+    // printf("%d cpus available\n", CPU_COUNT(&cpu_set));
+    // cpu_cnt = CPU_COUNT(&cpu_set);
 
     /* initialize */
     MPI_Init(&argc, &argv);

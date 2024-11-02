@@ -43,7 +43,6 @@ void* mandelbrot_col(void* threadid) {
         __mmask8 mask = (1 << z) - 1;
 
         // initialize
-        // __m512d x0 = _mm512_setzero_pd();
         __m512d y0 = _mm512_setzero_pd();
         __m512d x = _mm512_setzero_pd();
         __m512d y = _mm512_setzero_pd();
@@ -55,7 +54,6 @@ void* mandelbrot_col(void* threadid) {
         __m256i one = _mm256_set1_epi32(1);
         __m512d four = _mm512_set1_pd(4.0);
 
-        // __m512d w_vec = _mm512_set_pd(w, w + 1.0, w + 2.0, w + 3.0, w + 4.0, w + 5.0, w + 6.0, w + 7.0);
         __m512d w_vec = _mm512_setzero_pd();
         for (int i = 0; i < 8; ++i) {
             w_vec[i] = w + i;
@@ -65,10 +63,7 @@ void* mandelbrot_col(void* threadid) {
         __m512d w_mul_x0 = _mm512_mul_pd(w_vec, x0_offset_vec);
 
         __m512d x0 = _mm512_add_pd(w_mul_x0, left_vec);
-
-        // for (int i = 0; i < 8; ++i) {
-        //     x0[i] = (w + i) * x0_offset + left;
-        // }
+        __mmask8 finished_mask;
 
         for (int i = 0; i < height; ++i) {
             // initialize
@@ -82,17 +77,12 @@ void* mandelbrot_col(void* threadid) {
             __m256i repeats = _mm256_setzero_si256();
 
             // calculate
-
-            int flags[8];
-            int complete_num = 0;
-            memset(flags, 0, sizeof(flags));
-
-            for (int j = 0; j < iters; j++) {
+            for (int j = 0; j < iters; ++j) {
                 xx = _mm512_mul_pd(x, x);
                 yy = _mm512_mul_pd(y, y);
                 length_squared = _mm512_fmadd_pd(x, x, yy);
 
-                __mmask8 finished_mask = _mm512_cmplt_pd_mask(length_squared, four);
+                finished_mask = _mm512_cmplt_pd_mask(length_squared, four);
                 finished_mask &= mask;
                 if (finished_mask == 0) break;
                 repeats = _mm256_mask_add_epi32(repeats, finished_mask, repeats, one);
@@ -112,8 +102,9 @@ int main(int argc, char** argv) {
     /* detect how many CPUs are available */
     cpu_set_t cpu_set;
     sched_getaffinity(0, sizeof(cpu_set), &cpu_set);
-    printf("%d cpus available\n", CPU_COUNT(&cpu_set));
+    // printf("%d cpus available\n", CPU_COUNT(&cpu_set));
     cpu_cnt = CPU_COUNT(&cpu_set);
+    cpu_cnt *= 2;
 
     /* argument parsing */
     assert(argc == 9);
@@ -146,6 +137,7 @@ int main(int argc, char** argv) {
     }
 
     write_png(filename, iters, width, height, image);
+
     // free(image);
     return 0;
 }
