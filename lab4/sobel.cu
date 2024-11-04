@@ -11,8 +11,6 @@
 #define xBound X / 2
 #define yBound Y / 2
 #define SCALE 8
-#define maxthreads 1024
-#define shared_s_size 36 * 36
 
 int read_png(const char* filename, unsigned char** image, unsigned* height,
              unsigned* width, unsigned* channels) {
@@ -103,53 +101,37 @@ inline __device__ int bound_check(int val, int lower, int upper) {
 }
 
 __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsigned width, unsigned channels) {
+    // share s
+    __shared__ unsigned char share_s[36 * 36 * 3];
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     float val[Z][3];
     if (x >= width) return;
     if (y >= height) return;
 
-    int last = blockIdx.x * blockDim.x + maxthreads - 1;
-
     // share mask
-    __shared__ char s_mask[Z][Y][X];
-    for (int i = 0; i < Z; ++i) {
-        for (int j = 0; j < Y; ++j) {
-            for (int k = 0; k < X; ++k) {
-                s_mask[i][j][k] = mask[i][j][k];
-            }
-        }
+    __shared__ char shared_mask[Z * Y * X];
+    int i = threadIdx.x % Z;
+    int j = threadIdx.y % Y;
+    for (int k = 0; k < X; k++) {
+        shared_mask[X * (i * Y + j) + k] = mask[i][j][k];
     }
-    // share s
-    __shared__ unsigned char sR[shared_s_size];
-    __shared__ unsigned char sG[shared_s_size];
-    __shared__ unsigned char sB[shared_s_size];
 
-    for (int v = -yBound; v <= yBound; ++v) {
-        for (int u = -xBound; u <= xBound; ++u) {
-            if (bound_check(x + u, 0, width) && bound_check(y + v, 0, height)) {
-                const unsigned char R = s[channels * (width * (y + v) + (x + u)) + 2];
-                const unsigned char G = s[channels * (width * (y + v) + (x + u)) + 1];
-                const unsigned char B = s[channels * (width * (y + v) + (x + u)) + 0];
-            }
+    int threadid = threadIdx.x + blockDim.x * threadIdx.y;
+    int lowerx = blockIdx.x * blockDim.x - xBound;
+    int lowery = blockIdx.y * blockDim.y - yBound;
+    int bound = 36 * 36;
+    int threadnum = blockDim.x * blockDim.y;
+#pragma unroll
+    for (int i = threadid; i < bound; i += threadnum) {
+        int newX = i / 36;
+        int newY = i % 36;
+        if (bound_check(newX + lowerx, 0, width) && bound_check(newY + lowery, 0, height)) {
+            share_s[channels * (newX * 36 + newY) + 2] = s[channels * (width * (newY + lowery) + (newX + lowerx)) + 2];
+            share_s[channels * (newX * 36 + newY) + 1] = s[channels * (width * (newY + lowery) + (newX + lowerx)) + 1];
+            share_s[channels * (newX * 36 + newY) + 0] = s[channels * (width * (newY + lowery) + (newX + lowerx)) + 0];
         }
     }
-    // old
-    // #pragma unroll
-    // for (int v = -yBound; v <= yBound; ++v) {
-    //     if (bound_check(y + v, 0, height) && bound_check(x - 2, 0, width)) {
-    //         sR[(maxthreads + 4) * (v + 2) + threadIdx.x] = s[channels * (width * (y + v) + (x - 2)) + 2];
-    //         sG[(maxthreads + 4) * (v + 2) + threadIdx.x] = s[channels * (width * (y + v) + (x - 2)) + 1];
-    //         sB[(maxthreads + 4) * (v + 2) + threadIdx.x] = s[channels * (width * (y + v) + (x - 2)) + 0];
-    //     }
-    //     for (int i = 0; i < 4; ++i) {
-    //         if (threadIdx.x == maxthreads - 1 && bound_check(y + v, 0, height) && bound_check((last - 1 + i), 0, width)) {
-    //             sR[(maxthreads + 4) * (v + 2) + maxthreads + i] = s[channels * (width * (y + v) + (last - 1 + i)) + 2];
-    //             sG[(maxthreads + 4) * (v + 2) + maxthreads + i] = s[channels * (width * (y + v) + (last - 1 + i)) + 1];
-    //             sB[(maxthreads + 4) * (v + 2) + maxthreads + i] = s[channels * (width * (y + v) + (last - 1 + i)) + 0];
-    //         }
-    //     }
-    // }
     __syncthreads();
 
     /* Z axis of mask */
@@ -162,9 +144,11 @@ __global__ void sobel(unsigned char* s, unsigned char* t, unsigned height, unsig
         for (int v = -yBound; v <= yBound; ++v) {
             for (int u = -xBound; u <= xBound; ++u) {
                 if (bound_check(x + u, 0, width) && bound_check(y + v, 0, height)) {
-                    val[i][2] += sR[(maxthreads + 4) * (v + 2) + threadIdx.x + u + 2] * s_mask[i][u + xBound][v + yBound];
-                    val[i][1] += sG[(maxthreads + 4) * (v + 2) + threadIdx.x + u + 2] * s_mask[i][u + xBound][v + yBound];
-                    val[i][0] += sB[(maxthreads + 4) * (v + 2) + threadIdx.x + u + 2] * s_mask[i][u + xBound][v + yBound];
+                    int tmp = channels * (((x + u) - lowerx) * 36 + ((y + v) - lowery));
+                    char m = shared_mask[X * (i * Y + (u + xBound)) + (v + yBound)];
+                    val[i][2] += share_s[tmp + 2] * m;
+                    val[i][1] += share_s[tmp + 1] * m;
+                    val[i][0] += share_s[tmp + 0] * m;
                 }
             }
         }
@@ -213,21 +197,9 @@ int main(int argc, char** argv) {
     cudaMemcpy(dsrc, src, height * width * channels * sizeof(unsigned char), cudaMemcpyHostToDevice);
 
     // decide to use how many blocks and threads
-    const int num_threads_x = 32;
-    const int num_threads_y = 32;
 
-    // 確保餘數的部分也會算到，若剛好整除數量就照舊
-    const int grid_size_x = (width + num_threads_x - 1) / num_threads_x;
-    const int grid_size_y = (height + num_threads_y - 1) / num_threads_y;
-
-    dim3 block(num_threads_x, num_threads_y);
-    dim3 grid(grid_size_x, grid_size_y);
-
-    // const int num_threads = maxthreads;
-    // const int blocks_num_x = width / num_threads + 1;
-    // const int blocks_num_y = height;
-
-    // dim3 block(blocks_num_x, blocks_num_y);
+    dim3 block(32, 32);
+    dim3 grid(width / 32 + 1, height / 32 + 1);
 
     // launch cuda kernel
     sobel<<<grid, block>>>(dsrc, ddst, height, width, channels);
