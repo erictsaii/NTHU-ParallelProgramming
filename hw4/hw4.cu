@@ -13,7 +13,7 @@ void input(char *input_filename);
 void output(char *output_filename);
 void launch_flash_attention(float *q, float *k, float *v, float *o);
 
-__global__ void flash_attention(float *q, float *k, float *v, float *o, float *l, float *m, int d, int tc);
+__global__ void flash_attention(float *q, float *k, float *v, float *o, int d, int tc);
 
 int B, N, d;
 float *Q, *K, *V, *O;
@@ -64,15 +64,8 @@ void input(char *input_filename) {
 }
 
 void launch_flash_attention(float *q, float *k, float *v, float *o) {
-    float *l = (float *)malloc(N * sizeof(float));
-    float *m = (float *)malloc(N * sizeof(float));
-    memset(l, 0x00, N * sizeof(float));
-    for (int i = 0; i < N; i++) {
-        m[i] = FLT_MIN;
-    }
-
     int tr = N / br, tc = N / bc;
-    float *d_q, *d_k, *d_v, *d_o, *d_l, *d_m;
+    float *d_q, *d_k, *d_v, *d_o;
     // Q
     cudaMalloc(&d_q, N*d*sizeof(float));
     cudaMemcpy(d_q, q, N*d*sizeof(float), cudaMemcpyHostToDevice);
@@ -85,42 +78,32 @@ void launch_flash_attention(float *q, float *k, float *v, float *o) {
     // O
     cudaMalloc(&d_o, N*d*sizeof(float));
     cudaMemcpy(d_o, o, N*d*sizeof(float), cudaMemcpyHostToDevice);
-    // l
-    cudaMalloc(&d_l, N*sizeof(float));
-    cudaMemcpy(d_l, l, N*sizeof(float), cudaMemcpyHostToDevice);
-    // m
-    cudaMalloc(&d_m, N*sizeof(float));
-    cudaMemcpy(d_m, m, N*sizeof(float), cudaMemcpyHostToDevice);
     
     // grid size and block size
     dim3 grid_size(tr);
     dim3 block_size(32, 32); // 32 * 32 threads
 
     // kernel function
-    flash_attention<<<grid_size, block_size>>>(d_q, d_k, d_v, d_o, d_l, d_m, d, tc);
+    flash_attention<<<grid_size, block_size>>>(d_q, d_k, d_v, d_o, d, tc);
 
     // copy the output to host
     cudaMemcpy(o, d_o, N*d*sizeof(float), cudaMemcpyDeviceToHost);
 }
 
-__global__ void flash_attention(float *q, float *k, float *v, float *o, float *l, float *m, int d, int tc) {
+__global__ void flash_attention(float *q, float *k, float *v, float *o, int d, int tc) {
     __shared__ float kj[bc * d_max]; 
     __shared__ float vj[bc * d_max];
     __shared__ float qi[br * d_max];
     __shared__ float oi[br * d_max];
     __shared__ float li[br];
-    __shared__ float mi[br];
     __shared__ float li_new[br];
-    __shared__ float mi_new[br];
-
-    __shared__ float sij[br * bc];
     __shared__ float pij[br * bc];
-    __shared__ float mij[br];
-    __shared__ float lij[br];
 
+    float mij = 3.0;
     int qo_offset = blockIdx.x * br * d;
-    int lm_offset = blockIdx.x * br;
     float sqrt_d = 1.0 / sqrtf(d);
+    float pv = 0.0F;
+    float tmp;
 
     // load qi
     for (int i = 0; i < d; i += 32) {
@@ -129,19 +112,14 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, float *l
     
     // load oi
     for (int i = 0; i < d; i += 32) {
-        oi[threadIdx.y * d + threadIdx.x + i] = o[qo_offset + threadIdx.y * d + threadIdx.x + i];
+        oi[threadIdx.y * d + threadIdx.x + i] = 0.0;
     }
    
     // load li
     if (threadIdx.y == 0) {
-        li[threadIdx.x] = l[lm_offset + threadIdx.x];
+        li[threadIdx.x] = 0.0;
     }
-  
-    // load mi
-    if (threadIdx.y == 0){
-        mi[threadIdx.x] = m[lm_offset + threadIdx.x];
-    }
-    __syncthreads();
+
 
     // start for-loop
     for (int j = 0; j < tc; ++j) {
@@ -158,53 +136,39 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, float *l
         __syncthreads();
         
         // QKDotAndScalar
-        sij[threadIdx.y * bc + threadIdx.x] = 0.0F;
+        tmp = 0.0F;
         for (int t = 0; t < d; t++) {
-            sij[threadIdx.y * bc + threadIdx.x] += qi[threadIdx.y * d + t] * kj[threadIdx.x * d + t];
+            tmp += qi[threadIdx.y * d + t] * kj[threadIdx.x * d + t];
         }
-        sij[threadIdx.y * bc + threadIdx.x] *= sqrt_d;
-        __syncthreads();
-
-        // RowMax (turn to threadIdx.y==0 ?)
-        if (threadIdx.x == 0) {
-            mij[threadIdx.y] = sij[threadIdx.y * bc];
-            for (int i = 0; i < bc; ++i) {
-                mij[threadIdx.y] = fmaxf(mij[threadIdx.y], sij[threadIdx.y * bc + i]);
-            }
-        }
-        __syncthreads();
+        tmp *= sqrt_d;
 
         // MinusMaxAndExp
-        pij[threadIdx.y * bc + threadIdx.x] = expf(sij[threadIdx.y  * bc + threadIdx.x] - mij[threadIdx.y]);
+        pij[threadIdx.y * bc + threadIdx.x] = expf(tmp - mij);
         __syncthreads();
 
         // RowSum
-        if (threadIdx.x == 0) {
-            lij[threadIdx.y] = 0.0F;
+        if (threadIdx.y == 0) {
+            tmp = 0.0F;
             for (int i = 0; i < bc; ++i) {
-                lij[threadIdx.y] += pij[threadIdx.y * bc + i];
+                tmp += pij[threadIdx.x * bc + i];
             }
         }
-        __syncthreads();
 
         // UpdateMiLiOi
         if (threadIdx.y == 0) {
-            mi_new[threadIdx.x] = fmaxf(mi[threadIdx.x], mij[threadIdx.x]);
-            li_new[threadIdx.x] = expf(mi[threadIdx.x] - mi_new[threadIdx.x]) * li[threadIdx.x] + expf(mij[threadIdx.x] - mi_new[threadIdx.x]) * lij[threadIdx.x];
+            li_new[threadIdx.x] = li[threadIdx.x] + tmp;
         }
         __syncthreads();
         for (int i = 0; i < d; i += 32) {
-            float pv = 0.0F;
+            pv = 0.0F;
             for (int t = 0; t < bc; ++t) {
                 pv += pij[threadIdx.y * bc + t] * vj[t * d + threadIdx.x + i];
             } 
-            oi[threadIdx.y * d + threadIdx.x + i] = (li[threadIdx.y] * expf(mi[threadIdx.y] - mi_new[threadIdx.y]) * oi[threadIdx.y * d + threadIdx.x + i] + expf(mij[threadIdx.y] - mi_new[threadIdx.y]) * pv) / li_new[threadIdx.y];
+            oi[threadIdx.y * d + threadIdx.x + i] = (li[threadIdx.y]  * oi[threadIdx.y * d + threadIdx.x + i] + pv) / li_new[threadIdx.y];
         }
         if (threadIdx.y == 0) {
-            mi[threadIdx.x] = mi_new[threadIdx.x];
             li[threadIdx.x] = li_new[threadIdx.x];
         }
-        __syncthreads();
     }
   
     // update o
@@ -217,11 +181,6 @@ void output(char *output_filename) {
     FILE *file = fopen(output_filename, "wb");
 
     fwrite(O, sizeof(float), B * N * d, file);
-
-    free(Q);
-    free(K);
-    free(V);
-    free(O);
 
     fclose(file);
 }
