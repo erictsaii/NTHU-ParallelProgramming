@@ -1,0 +1,12 @@
+input可以改，改成一次讀全部
+malloc改成一次宣告全部
+還沒做pin memory
+動態分配share memory，不要宣告成d_max
+row max可以做歸約操作
+__expf()可以更快
+選擇y==0或是x==0?
+要檢查__syncthreads()的問題
+開第三維度把B加進來
+grid size改成tr?
+br可以更大?
+我的forloop裡面沒有重新load oi, li, mi，update的時候要記得
