@@ -1,3 +1,8 @@
+CC = gcc
+CXX = g++
+NVCC = nvcc
+HIPCC = hipcc
+
 NVFLAGS = -std=c++11 -O3 -Xptxas="-v" -arch=sm_61 
 HIPCCFLAGS = -std=c++11 -O3 --offload-arch=gfx90a
 
@@ -12,11 +17,11 @@ clean:
 	rm -f $(EXES)
 
 seq: seq.cc
-	g++ $(CXXFLAGS) -o $@ $?
+	$(CXX) $(CXXFLAGS) -o $@ $?
 
 hw3-2: hw3-2.cu
-	nvcc $(NVFLAGS) $(LDFLAGS) -o $@ $?
+	$(NVCC) $(NVFLAGS) $(LDFLAGS) -o $@ $?
 
 hw3-2-amd: hw3-2.hip
-	hipcc $(HIPCCFLAGS) $(LDFLAGS) -o $@ $<
+	$(HIPCC) $(HIPCCFLAGS) $(LDFLAGS) -o $@ $<
 
