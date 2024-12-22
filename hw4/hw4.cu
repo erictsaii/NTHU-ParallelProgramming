@@ -4,8 +4,10 @@
 #include <math.h>
 #include <float.h>
 #include <sys/time.h>
+#include <chrono>
 
-#define d_max 64
+
+#define d_max 65
 #define bc 32
 #define br 32
 
@@ -14,7 +16,7 @@ void output(char *output_filename);
 __global__ void flash_attention(float *q, float *k, float *v, float *o, int d, int tc, int N);
 
 int B, N, d;
-float *Q, *K, *V, *O;
+float *Q, *K, *V, *O, *buf;
 
 int main(int argc, char *argv[]) {
     input(argv[1]);
@@ -36,9 +38,9 @@ int main(int argc, char *argv[]) {
     cudaMalloc(&d_v, BND);
     cudaMemcpy(d_v, V, BND, cudaMemcpyHostToDevice);
     // O
-    // cudaHostRegister(O, BND, cudaHostRegisterDefault);
+    cudaHostRegister(O, BND, cudaHostRegisterDefault);
     cudaMalloc(&d_o, BND);
-    // cudaMemcpy(d_o, O, BND, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_o, O, BND, cudaMemcpyHostToDevice);
     
     // grid size and block size
     dim3 grid_size(tr, B);
@@ -56,17 +58,22 @@ int main(int argc, char *argv[]) {
 }
 
 void input(char *input_filename) {
+    // auto start = std::chrono::steady_clock::now();
+
     FILE *file = fopen(input_filename, "rb");
 
     fread(&B, sizeof(int), 1, file);
     fread(&N, sizeof(int), 1, file);
     fread(&d, sizeof(int), 1, file);
 
-    size_t BND = B * N * d * sizeof(float);
-    Q = (float *)malloc(BND);
-    K = (float *)malloc(BND);
-    V = (float *)malloc(BND);
-    O = (float *)malloc(BND);
+    size_t BND_size = B * N * d * sizeof(float);
+    int BND = B * N * d;
+    buf = (float *)malloc(BND_size * 4);    
+    Q = buf;
+    K = Q + BND;
+    V = K + BND;
+    O = V + BND;
+    
 
     int Nd = N * d;
     int offset = 0;
@@ -81,6 +88,9 @@ void input(char *input_filename) {
     memset(O, 0x00, B * N * d * sizeof(float));
 
     fclose(file);
+    // auto end = std::chrono::steady_clock::now();
+    // auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    // printf("total time %lld ms\n", duration.count());
 }
 
 
@@ -101,12 +111,12 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, int d, i
 
     // load qi
     for (int i = 0; i < d; i += 32) {
-        qi[threadIdx.y * d + threadIdx.x + i] = q[qo_offset + threadIdx.y * d + threadIdx.x + i];
+        qi[threadIdx.y * d_max + threadIdx.x + i] = q[qo_offset + threadIdx.y * d + threadIdx.x + i];
     }
     
     // load oi
     for (int i = 0; i < d; i += 32) {
-        oi[threadIdx.y * d + threadIdx.x + i] = 0.0;
+        oi[threadIdx.y * d_max + threadIdx.x + i] = 0.0;
     }
    
     // load li
@@ -120,19 +130,19 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, int d, i
         // load kj 
         int kjvj_offset = blockIdx.y * N * d + j * bc * d;
         for (int i = 0; i < d; i += 32) {
-            kj[threadIdx.y * d + threadIdx.x + i] = k[kjvj_offset + threadIdx.y * d + threadIdx.x + i];
+            kj[threadIdx.y * d_max + threadIdx.x + i] = k[kjvj_offset + threadIdx.y * d + threadIdx.x + i];
         }
 
         // load vj
         for (int i = 0; i < d; i += 32) {
-            vj[threadIdx.y * d + threadIdx.x + i] = v[kjvj_offset + threadIdx.y * d + threadIdx.x + i];
+            vj[threadIdx.y * d_max + threadIdx.x + i] = v[kjvj_offset + threadIdx.y * d + threadIdx.x + i];
         }
         __syncthreads();
         
         // QKDotAndScalar
         tmp = 0.0F;
         for (int t = 0; t < d; t++) {
-            tmp += qi[threadIdx.y * d + t] * kj[threadIdx.x * d + t];
+            tmp += qi[threadIdx.y * d_max + t] * kj[threadIdx.x * d_max + t];
         }
         tmp *= sqrt_d;
 
@@ -156,9 +166,9 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, int d, i
         for (int i = 0; i < d; i += 32) {
             pv = 0.0F;
             for (int t = 0; t < bc; ++t) {
-                pv += pij[threadIdx.y * bc + t] * vj[t * d + threadIdx.x + i];
+                pv += pij[threadIdx.y * bc + t] * vj[t * d_max + threadIdx.x + i];
             } 
-            oi[threadIdx.y * d + threadIdx.x + i] = (li[threadIdx.y]  * oi[threadIdx.y * d + threadIdx.x + i] + pv) / li_new[threadIdx.y];
+            oi[threadIdx.y * d_max + threadIdx.x + i] = (li[threadIdx.y]  * oi[threadIdx.y * d_max + threadIdx.x + i] + pv) / li_new[threadIdx.y];
         }
         if (threadIdx.y == 0) {
             li[threadIdx.x] = li_new[threadIdx.x];
@@ -167,7 +177,7 @@ __global__ void flash_attention(float *q, float *k, float *v, float *o, int d, i
   
     // update o
     for (int i = 0; i < d; i += 32) {
-        o[qo_offset + threadIdx.y * d + threadIdx.x + i] = oi[threadIdx.y * d + threadIdx.x + i];
+        o[qo_offset + threadIdx.y * d + threadIdx.x + i] = oi[threadIdx.y * d_max + threadIdx.x + i];
     }
 }
 
